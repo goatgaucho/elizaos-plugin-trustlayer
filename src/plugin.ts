@@ -51,6 +51,39 @@ async function fetchTrustReport(agentId: string): Promise<Record<string, unknown
   }
 }
 
+async function fetchReviewerData(address: string): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(`${apiUrl}/reviewer/${address}`);
+    if (res.status === 402) return null;
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchOwnerData(address: string): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(`${apiUrl}/owner/${address}`);
+    if (res.status === 402) return null;
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchHistory(agentId: string): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(`${apiUrl}/history/${agentId}`);
+    if (res.status === 402) return null;
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 // --- Provider: injects trust context into agent prompts ---
 
 export const trustScoreProvider: Provider = {
@@ -219,6 +252,326 @@ export const trustCheckAction: Action = {
   },
 };
 
+// --- Action: reviewer lookup ---
+
+export const reviewerLookupAction: Action = {
+  name: "CHECK_REVIEWER",
+  description:
+    "Look up a reviewer's quality score and review history on TrustLayer. " +
+    "Use this to check whether a reviewer giving feedback to agents is trustworthy. " +
+    "Requires a wallet address (0x...).",
+  similes: [
+    "check reviewer",
+    "is this reviewer trustworthy",
+    "reviewer quality",
+    "reviewer reputation",
+    "reviewer score",
+    "who is this reviewer",
+  ],
+
+  examples: [
+    [
+      {
+        name: "user",
+        content: { text: "Check reviewer 0x1234567890abcdef1234567890abcdef12345678" },
+      },
+      {
+        name: "agent",
+        content: {
+          text: "I'll look up the reviewer quality for that address.",
+          actions: ["CHECK_REVIEWER"],
+        },
+      },
+    ],
+    [
+      {
+        name: "user",
+        content: { text: "Is this reviewer trustworthy? 0xabcdefabcdefabcdefabcdefabcdefabcdefabcd" },
+      },
+      {
+        name: "agent",
+        content: {
+          text: "Let me check the reviewer's quality score on TrustLayer.",
+          actions: ["CHECK_REVIEWER"],
+        },
+      },
+    ],
+  ],
+
+  validate: async (_runtime: IAgentRuntime, message: Memory) => {
+    const text = typeof message.content === "string"
+      ? message.content
+      : message.content?.text ?? "";
+    return /\b0x[a-fA-F0-9]{40}\b/.test(text);
+  },
+
+  handler: async (
+    _runtime: IAgentRuntime,
+    message: Memory,
+    _state?: State,
+    _options?: Record<string, unknown>,
+    callback?: HandlerCallback
+  ) => {
+    const text = typeof message.content === "string"
+      ? message.content
+      : message.content?.text ?? "";
+
+    const match = text.match(/\b0x[a-fA-F0-9]{40}\b/);
+
+    if (!match) {
+      return {
+        text: "No wallet address found. Provide a valid Ethereum address (0x...).",
+        success: false,
+      };
+    }
+
+    const address = match[0];
+
+    if (callback) {
+      callback({ text: `Looking up reviewer data for ${address}...` });
+    }
+
+    const data = await fetchReviewerData(address);
+
+    if (!data) {
+      return {
+        text: `Could not retrieve reviewer data for ${address}. The address may not have reviewed any agents, or x402 payment is required.`,
+        success: false,
+        error: "Reviewer not found or payment required",
+      };
+    }
+
+    const qualityScore = (data as any).quality_score ?? "unknown";
+    const qualityTier = (data as any).quality_tier ?? "unknown";
+    const reviewCount = (data as any).review_count ?? 0;
+
+    return {
+      text: `Reviewer report for ${address}:\n` +
+        `Quality score: ${qualityScore}\n` +
+        `Quality tier: ${qualityTier}\n` +
+        `Reviews submitted: ${reviewCount}`,
+      data: { reviewer: data },
+      success: true,
+    };
+  },
+};
+
+// --- Action: owner lookup ---
+
+export const ownerLookupAction: Action = {
+  name: "CHECK_OWNER",
+  description:
+    "Look up all agents owned by a wallet address across chains on TrustLayer. " +
+    "Returns the owner's agent portfolio, average trust score, and risk assessment. " +
+    "Requires a wallet address (0x...).",
+  similes: [
+    "check owner",
+    "who owns this agent",
+    "owner portfolio",
+    "owner agents",
+    "owner reputation",
+    "agents by owner",
+  ],
+
+  examples: [
+    [
+      {
+        name: "user",
+        content: { text: "Check owner 0x1234567890abcdef1234567890abcdef12345678" },
+      },
+      {
+        name: "agent",
+        content: {
+          text: "I'll look up all agents owned by that address.",
+          actions: ["CHECK_OWNER"],
+        },
+      },
+    ],
+    [
+      {
+        name: "user",
+        content: { text: "Who owns this agent? 0xabcdefabcdefabcdefabcdefabcdefabcdefabcd" },
+      },
+      {
+        name: "agent",
+        content: {
+          text: "Let me check the owner portfolio on TrustLayer.",
+          actions: ["CHECK_OWNER"],
+        },
+      },
+    ],
+  ],
+
+  validate: async (_runtime: IAgentRuntime, message: Memory) => {
+    const text = typeof message.content === "string"
+      ? message.content
+      : message.content?.text ?? "";
+    return /\b0x[a-fA-F0-9]{40}\b/.test(text);
+  },
+
+  handler: async (
+    _runtime: IAgentRuntime,
+    message: Memory,
+    _state?: State,
+    _options?: Record<string, unknown>,
+    callback?: HandlerCallback
+  ) => {
+    const text = typeof message.content === "string"
+      ? message.content
+      : message.content?.text ?? "";
+
+    const match = text.match(/\b0x[a-fA-F0-9]{40}\b/);
+
+    if (!match) {
+      return {
+        text: "No wallet address found. Provide a valid Ethereum address (0x...).",
+        success: false,
+      };
+    }
+
+    const address = match[0];
+
+    if (callback) {
+      callback({ text: `Looking up owner data for ${address}...` });
+    }
+
+    const data = await fetchOwnerData(address);
+
+    if (!data) {
+      return {
+        text: `Could not retrieve owner data for ${address}. The address may not own any registered agents, or x402 payment is required.`,
+        success: false,
+        error: "Owner not found or payment required",
+      };
+    }
+
+    const agentCount = (data as any).agent_count ?? 0;
+    const avgScore = (data as any).avg_trust_score ?? "unknown";
+    const riskAssessment = (data as any).risk_assessment ?? "unknown";
+    const chains = (data as any).chains ?? [];
+
+    return {
+      text: `Owner report for ${address}:\n` +
+        `Agents owned: ${agentCount}\n` +
+        `Average trust score: ${avgScore}\n` +
+        `Risk assessment: ${riskAssessment}\n` +
+        `Active chains: ${Array.isArray(chains) ? chains.join(", ") : chains}`,
+      data: { owner: data },
+      success: true,
+    };
+  },
+};
+
+// --- Action: score history ---
+
+export const historyAction: Action = {
+  name: "CHECK_SCORE_HISTORY",
+  description:
+    "Check the trust score history and trajectory for an AI agent on TrustLayer. " +
+    "Returns score time-series, 7-day and 30-day trajectory, and volatility. " +
+    "Requires an agent ID in chain:id format (e.g. base:1378, bsc:42000).",
+  similes: [
+    "score history",
+    "trust history",
+    "reputation trend",
+    "score trajectory",
+    "score over time",
+    "reputation history",
+  ],
+
+  examples: [
+    [
+      {
+        name: "user",
+        content: { text: "Show me the score history for base:1378" },
+      },
+      {
+        name: "agent",
+        content: {
+          text: "I'll check the trust score history for base:1378.",
+          actions: ["CHECK_SCORE_HISTORY"],
+        },
+      },
+    ],
+    [
+      {
+        name: "user",
+        content: { text: "What's the reputation trend for bsc:42000?" },
+      },
+      {
+        name: "agent",
+        content: {
+          text: "Let me look up the score trajectory for bsc:42000.",
+          actions: ["CHECK_SCORE_HISTORY"],
+        },
+      },
+    ],
+  ],
+
+  validate: async (_runtime: IAgentRuntime, message: Memory) => {
+    const text = typeof message.content === "string"
+      ? message.content
+      : message.content?.text ?? "";
+    return /\b(bsc|ethereum|base|monad|polygon|solana-mainnet):[a-zA-Z0-9_-]+\b/.test(text);
+  },
+
+  handler: async (
+    _runtime: IAgentRuntime,
+    message: Memory,
+    _state?: State,
+    _options?: Record<string, unknown>,
+    callback?: HandlerCallback
+  ) => {
+    const text = typeof message.content === "string"
+      ? message.content
+      : message.content?.text ?? "";
+
+    const match = text.match(
+      /\b(bsc|ethereum|base|monad|polygon|solana-mainnet):[a-zA-Z0-9_-]+\b/
+    );
+
+    if (!match) {
+      return {
+        text: "No agent ID found. Use format chain:id (e.g. base:1378, bsc:42000).",
+        success: false,
+      };
+    }
+
+    const agentId = match[0];
+
+    if (callback) {
+      callback({ text: `Looking up score history for ${agentId}...` });
+    }
+
+    const data = await fetchHistory(agentId);
+
+    if (!data) {
+      return {
+        text: `Could not retrieve score history for ${agentId}. The agent may not have enough history, or x402 payment is required.`,
+        success: false,
+        error: "History not found or payment required",
+      };
+    }
+
+    const trajectory7d = (data as any).trajectory_7d ?? "unknown";
+    const trajectory30d = (data as any).trajectory_30d ?? "unknown";
+    const volatility = (data as any).volatility ?? "unknown";
+    const currentScore = (data as any).current_score ?? "unknown";
+    const dataPoints = (data as any).data_points ?? 0;
+
+    return {
+      text: `Score history for ${agentId}:\n` +
+        `Current score: ${currentScore}\n` +
+        `7-day trajectory: ${trajectory7d}\n` +
+        `30-day trajectory: ${trajectory30d}\n` +
+        `Volatility: ${volatility}\n` +
+        `Data points: ${dataPoints}`,
+      data: { history: data },
+      success: true,
+    };
+  },
+};
+
 // --- Plugin definition ---
 
 export const trustlayerPlugin: Plugin = {
@@ -247,7 +600,7 @@ export const trustlayerPlugin: Plugin = {
     console.log(`[TrustLayer] Plugin initialized — API: ${apiUrl}, min score: ${minScore}`);
   },
 
-  actions: [trustCheckAction],
+  actions: [trustCheckAction, reviewerLookupAction, ownerLookupAction, historyAction],
   providers: [trustScoreProvider],
 };
 
